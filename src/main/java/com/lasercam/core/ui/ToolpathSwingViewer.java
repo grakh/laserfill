@@ -26,7 +26,7 @@ public class ToolpathSwingViewer extends JFrame {
 
     private JComboBox<String> fillCombo;
     private JSpinner spPitch, spAngle, spAngle2, spFeed, spPower;
-    private JCheckBox cbContour, cbHoleOutline, cbOptimize, cbCut, cbTravel, cbBound, cbGrid, cbMill;
+    private JCheckBox cbContour, cbOptimize, cbCut, cbTravel, cbBound, cbGrid, cbMill;
     private JRadioButton rbContour, rbSkip;
     private JSpinner spOffset, spZDepth, spZStep, spZSafe, spZFeed;
     private JButton btnAnim;
@@ -98,7 +98,8 @@ public class ToolpathSwingViewer extends JFrame {
         spAngle = sp(0, 0, 359, 1);        addRow(p, r++, "Angle °", spAngle);
         spAngle2 = sp(90, 0, 359, 1); spAngle2.setEnabled(false);
                                             addRow(p, r++, "2nd angle °", spAngle2);
-        spOffset = sp(0, 0, 20, 0.1);       addRow(p, r++, "Kerf mm", spOffset);
+        spOffset = sp(0, -20, 20, 0.05);    addRow(p, r++, "Kerf ± mm", spOffset);
+        spOffset.setToolTipText("− shifts every contour into its own shape, + shifts it out");
 
         // Hole handling — 2 radio buttons (Column / Jump)
         rbContour = radio("Column", true);
@@ -110,10 +111,8 @@ public class ToolpathSwingViewer extends JFrame {
         holeRow.add(rbContour); holeRow.add(rbSkip);
         addRow(p, r++, "Holes", holeRow);
 
-        cbContour = chk("Cut outline"); cbOptimize = chk("Optimize path"); cbOptimize.setSelected(true);
-        cbHoleOutline = chk("Hole outline");
-        addRight2(p, r++, cbContour, cbHoleOutline);
-        addRight(p, r++, cbOptimize);
+        cbContour = chk("Outline"); cbOptimize = chk("Optimize"); cbOptimize.setSelected(true);
+        addRight2(p, r++, cbContour, cbOptimize);
         addRight(p, r++, btn("▸  Generate", B2));
 
         addSep(p, r++);
@@ -331,69 +330,60 @@ public class ToolpathSwingViewer extends JFrame {
         ScanlineFill.HoleMode hMode = rbContour.isSelected() ? ScanlineFill.HoleMode.CONTOUR
                                                              : ScanlineFill.HoleMode.SKIP;
 
-        var offsetter = new com.lasercam.core.geometry.OffsetPolygon();
-
-        Toolpath tp = new Toolpath();
-
-        // 1. Hole outline (inner, -kerf) — first
-        if (cbHoleOutline.isSelected()) {
-            for (var poly : polygons) {
-                if (offset > 0) {
-                    var outerInset = offsetter.offset(poly.getOuter(), -offset);
-                    tp.addCutPolyline(outerInset != null ? outerInset : poly.getOuter());
-                    for (var h : poly.getHoles()) {
-                        var holeInset = offsetter.offset(h, -offset);
-                        tp.addCutPolyline(holeInset != null ? holeInset : h);
-                    }
-                } else {
-                    tp.addCutPolyline(poly.getOuter());
-                    for (var h : poly.getHoles()) tp.addCutPolyline(h);
-                }
-            }
+        // Every contour (outer, hole, island) is offset by the same signed kerf:
+        // −k moves it into its own shape, +k moves it out. Outline and fill both
+        // use these offset contours, so the fill always ends exactly on the outline.
+        List<PolygonWithHoles> work = new ArrayList<>();
+        for (var poly : polygons) {
+            var op = offsetPolygon(poly, offset);
+            if (op != null) work.add(op);
         }
 
-        // 2. Fill
-        for (var poly : polygons) {
+        Toolpath tp = new Toolpath();
+        boolean outline = cbContour.isSelected();
+
+        // 1. Hole contours first (internal cuts)
+        if (outline) for (var poly : work) for (var h : poly.getHoles()) tp.addCutPolyline(h);
+
+        // 2. Fill — geometry is already offset, so no extra kerf inside the fills
+        for (var poly : work) {
             if (fi == 1) {
                 ScanlineFill f = new ScanlineFill(pitch, angle);
-                f.setHoleMode(hMode); f.setHoleOffset(offset);
+                f.setHoleMode(hMode);
                 merge(tp, f.generate(poly));
             } else if (fi == 2) {
                 SpiralFill sf = new SpiralFill(pitch);
-                sf.setKerf(offset);
                 sf.setHoleMode(SpiralFill.HoleMode.JUMP);
                 merge(tp, sf.generate(poly));
             } else if (fi == 3) {
                 ScanlineFill f1 = new ScanlineFill(pitch, angle);
                 ScanlineFill f2 = new ScanlineFill(pitch, ((Number) spAngle2.getValue()).doubleValue());
-                f1.setHoleMode(hMode); f1.setHoleOffset(offset);
-                f2.setHoleMode(hMode); f2.setHoleOffset(offset);
+                f1.setHoleMode(hMode); f2.setHoleMode(hMode);
                 merge(tp, f1.generate(poly));
                 merge(tp, f2.generate(poly));
             }
-            // fi == 0 → None: no fill (only outline is emitted above if Cut outline checked)
+            // fi == 0 → None: outline only
         }
         if (cbOptimize.isSelected() && fi == 3) tp = new ToolpathOptimizer().optimize(tp);
 
-        // 3. Cut outline (outer, +kerf) — LAST operation, cuts the part free
-        if (cbContour.isSelected()) {
-            for (var poly : polygons) {
-                if (offset > 0) {
-                    var outerExp = offsetter.offset(poly.getOuter(), offset);
-                    tp.addCutPolyline(outerExp != null ? outerExp : poly.getOuter());
-                    for (var h : poly.getHoles()) {
-                        var holeExp = offsetter.offset(h, offset);
-                        tp.addCutPolyline(holeExp != null ? holeExp : h);
-                    }
-                } else {
-                    tp.addCutPolyline(poly.getOuter());
-                    for (var h : poly.getHoles()) tp.addCutPolyline(h);
-                }
-            }
-        }
+        // 3. Outer contours last — the part is released only after all inner work
+        if (outline) for (var poly : work) tp.addCutPolyline(poly.getOuter());
 
-        // Hole outline was moved to the top of this method
         toolpath = tp; canvas.stopAnimation(); canvas.repaint(); updateStats();
+    }
+
+    /** Offset outer and holes by the same signed distance; drops holes that collapse. */
+    private PolygonWithHoles offsetPolygon(PolygonWithHoles poly, double k) {
+        if (Math.abs(k) < 1e-9) return poly;
+        var off = new com.lasercam.core.geometry.OffsetPolygon();
+        Polyline outer = off.offset(poly.getOuter(), k);
+        if (outer == null) return null; // part vanished at this kerf
+        PolygonWithHoles r = new PolygonWithHoles(outer);
+        for (var h : poly.getHoles()) {
+            Polyline oh = off.offset(h, k);
+            if (oh != null) r.addHole(oh);
+        }
+        return r;
     }
 
     private void merge(Toolpath d, Toolpath s) { for (var seg : s.getSegments()) d.addSegment(seg); }

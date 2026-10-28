@@ -133,6 +133,11 @@ public class LaserCamEngine {
         List<PolygonWithHoles> result = new ArrayList<>();
         if (closedPolylines.isEmpty()) return result;
 
+        // Drop duplicate contours. PDF/AI export a filled+stroked shape twice
+        // (once for the fill, once for the stroke); duplicates break nesting depth,
+        // so a cut-out inside a filled shape stopped being a hole.
+        closedPolylines = dedupe(closedPolylines);
+
         // Precompute area and a representative point for each polyline
         int n = closedPolylines.size();
         double[] areas = new double[n];
@@ -180,6 +185,27 @@ public class LaserCamEngine {
             }
         }
         return result;
+    }
+
+    /** Remove contours that coincide with an earlier one (same bbox and area). */
+    private List<Polyline> dedupe(List<Polyline> in) {
+        final double tol = 0.05;
+        List<Polyline> out = new ArrayList<>();
+        List<Double> outAreas = new ArrayList<>();
+        for (Polyline p : in) {
+            double a = polyArea(p);
+            if (a < 1e-6) continue; // degenerate
+            boolean dup = false;
+            for (int k = 0; k < out.size(); k++) {
+                Polyline q = out.get(k);
+                double qa = outAreas.get(k);
+                if (Math.abs(p.getMinX() - q.getMinX()) < tol && Math.abs(p.getMaxX() - q.getMaxX()) < tol
+                 && Math.abs(p.getMinY() - q.getMinY()) < tol && Math.abs(p.getMaxY() - q.getMaxY()) < tol
+                 && Math.abs(a - qa) <= Math.max(qa, a) * 0.005) { dup = true; break; }
+            }
+            if (!dup) { out.add(p); outAreas.add(a); }
+        }
+        return out;
     }
 
     private double polyArea(Polyline pl) {

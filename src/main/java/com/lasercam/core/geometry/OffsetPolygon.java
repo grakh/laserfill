@@ -32,7 +32,10 @@ public class OffsetPolygon {
         double area = signedArea(pts);
         // For CCW: normal pointing left of edge is outside; we want +distance to go outside
         // For CW: normal to the right is outside
-        double sign = area > 0 ? 1.0 : -1.0;
+        // Left normal (-dy, dx) points INTO a positive-area polygon, so negate it:
+        // positive distance must move every contour OUTWARD of its own shape,
+        // regardless of winding or whether it is an outer contour or a hole.
+        double sign = area > 0 ? -1.0 : 1.0;
 
         int n = pts.size();
 
