@@ -99,7 +99,7 @@ public class ToolpathSwingViewer extends JFrame {
         spAngle2 = sp(90, 0, 359, 1); spAngle2.setEnabled(false);
                                             addRow(p, r++, "2nd angle °", spAngle2);
         spOffset = sp(0, -20, 20, 0.05);    addRow(p, r++, "Kerf ± mm", spOffset);
-        spOffset.setToolTipText("− shifts every contour into its own shape, + shifts it out");
+        spOffset.setToolTipText("− shrinks the part (outer in, holes larger), + grows it");
 
         // Hole handling — 2 radio buttons (Column / Jump)
         rbContour = radio("Column", true);
@@ -330,9 +330,9 @@ public class ToolpathSwingViewer extends JFrame {
         ScanlineFill.HoleMode hMode = rbContour.isSelected() ? ScanlineFill.HoleMode.CONTOUR
                                                              : ScanlineFill.HoleMode.SKIP;
 
-        // Every contour (outer, hole, island) is offset by the same signed kerf:
-        // −k moves it into its own shape, +k moves it out. Outline and fill both
-        // use these offset contours, so the fill always ends exactly on the outline.
+        // Each part's material is offset by the signed kerf (−k shrinks it, +k grows it).
+        // Outline and fill both use these offset contours, so the fill always ends
+        // exactly on the outline.
         List<PolygonWithHoles> work = new ArrayList<>();
         for (var poly : polygons) {
             var op = offsetPolygon(poly, offset);
@@ -372,7 +372,11 @@ public class ToolpathSwingViewer extends JFrame {
         toolpath = tp; canvas.stopAnimation(); canvas.repaint(); updateStats();
     }
 
-    /** Offset outer and holes by the same signed distance; drops holes that collapse. */
+    /**
+     * Offset the MATERIAL of a part by k: −k shrinks the part everywhere (outer
+     * moves in, holes grow), +k grows it (outer moves out, holes shrink).
+     * Islands are separate polygons, so they follow the same rule as any part.
+     */
     private PolygonWithHoles offsetPolygon(PolygonWithHoles poly, double k) {
         if (Math.abs(k) < 1e-9) return poly;
         var off = new com.lasercam.core.geometry.OffsetPolygon();
@@ -380,8 +384,8 @@ public class ToolpathSwingViewer extends JFrame {
         if (outer == null) return null; // part vanished at this kerf
         PolygonWithHoles r = new PolygonWithHoles(outer);
         for (var h : poly.getHoles()) {
-            Polyline oh = off.offset(h, k);
-            if (oh != null) r.addHole(oh);
+            Polyline oh = off.offset(h, -k); // hole moves opposite to its own contour
+            if (oh != null) r.addHole(oh);   // null = hole closed up, nothing to cut
         }
         return r;
     }
