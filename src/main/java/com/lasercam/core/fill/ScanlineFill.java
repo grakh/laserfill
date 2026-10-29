@@ -226,6 +226,68 @@ public class ScanlineFill implements FillStrategy {
         if (prev.dist(end) > 0.05) tp.addCutSegment(prev, end);
     }
 
+    /**
+     * Interior vertices of the shorter path along a hole boundary from 'from' to
+     * 'to' (both must lie on that hole). Returns null if the points are not on a
+     * common hole or the path is too long to be a serpentine step — then the
+     * column has to be split instead.
+     */
+    private List<Point2D> holeArc(PolygonWithHoles work, Point2D from, Point2D to) {
+        Polyline hole = null;
+        double best = Double.MAX_VALUE;
+        for (Polyline h : work.getHoles()) {
+            double df = distToPolyline(from, h), dt = distToPolyline(to, h);
+            if (df < 0.5 && dt < 0.5 && df + dt < best) { best = df + dt; hole = h; }
+        }
+        if (hole == null) return null;
+
+        List<Point2D> pts = hole.getPoints();
+        int n = pts.size();
+        if (n > 2 && pts.get(0).dist(pts.get(n - 1)) < 1e-9) n--;
+        if (n < 3) return null;
+
+        // Edge indices the two points sit on, and their projections
+        int ef = nearestEdge(pts, n, from), et = nearestEdge(pts, n, to);
+        // Walk forward (+1) and backward (-1), keep the shorter
+        List<Point2D> fwd = new ArrayList<>(), bwd = new ArrayList<>();
+        double lf = 0, lb = 0;
+        Point2D p = from;
+        for (int i = ef; i != et; i = (i + 1) % n) { Point2D v = pts.get((i + 1) % n); lf += p.dist(v); fwd.add(v); p = v; }
+        lf += p.dist(to);
+        p = from;
+        for (int i = ef; i != et; i = (i - 1 + n) % n) { Point2D v = pts.get(i); lb += p.dist(v); bwd.add(v); p = v; }
+        lb += p.dist(to);
+
+        List<Point2D> arc = lf <= lb ? fwd : bwd;
+        double len = Math.min(lf, lb);
+        if (len > Math.max(4 * pitch, 3 * from.dist(to))) return null;
+        return arc;
+    }
+
+    private int nearestEdge(List<Point2D> pts, int n, Point2D q) {
+        int best = 0; double bd = Double.MAX_VALUE;
+        for (int i = 0; i < n; i++) {
+            double d = distToSegment(q, pts.get(i), pts.get((i + 1) % n));
+            if (d < bd) { bd = d; best = i; }
+        }
+        return best;
+    }
+
+    private double distToPolyline(Point2D q, Polyline pl) {
+        List<Point2D> pts = pl.getPoints();
+        int n = pts.size();
+        if (n > 2 && pts.get(0).dist(pts.get(n - 1)) < 1e-9) n--;
+        double m = Double.MAX_VALUE;
+        for (int i = 0; i < n; i++) m = Math.min(m, distToSegment(q, pts.get(i), pts.get((i + 1) % n)));
+        return m;
+    }
+
+    private double distToSegment(Point2D p, Point2D a, Point2D b) {
+        double dx = b.x() - a.x(), dy = b.y() - a.y(), l2 = dx * dx + dy * dy;
+        double t = l2 < 1e-12 ? 0 : Math.max(0, Math.min(1, ((p.x() - a.x()) * dx + (p.y() - a.y()) * dy) / l2));
+        return Math.hypot(p.x() - a.x() - t * dx, p.y() - a.y() - t * dy);
+    }
+
     private int nearestVertex(List<Point2D> pts, int n, Point2D target) {
         int best = 0;
         double bestD = Double.MAX_VALUE;
@@ -337,8 +399,10 @@ public class ScanlineFill implements FillStrategy {
                         lr = !lr;
                         continue;
                     }
-                    // Check if connector lastEnd → curStart is safe
-                    boolean safe = !connectorHitsHole(work, lastEnd, curStart);
+                    // Connector lastEnd → curStart: straight if clear, along the hole edge
+                    // if it would cut a corner of a hole; split only if neither works.
+                    boolean safe = !connectorHitsHole(work, lastEnd, curStart)
+                                || holeArc(work, lastEnd, curStart) != null;
                     if (!safe) {
                         finalGroups.add(subG);
                         subG = new ArrayList<>();
@@ -357,20 +421,29 @@ public class ScanlineFill implements FillStrategy {
                     boolean leftToRight = true;
                     Point2D cursor = null;
 
+                    Point2D cursorW = null;
                     for (Span s : fg) {
-                        Point2D a, b;
-                        if (leftToRight) {
-                            a = rp(new Point2D(s.x1, s.y), rot, rad);
-                            b = rp(new Point2D(s.x2, s.y), rot, rad);
-                        } else {
-                            a = rp(new Point2D(s.x2, s.y), rot, rad);
-                            b = rp(new Point2D(s.x1, s.y), rot, rad);
-                        }
+                        Point2D aW = new Point2D(leftToRight ? s.x1 : s.x2, s.y);
+                        Point2D bW = new Point2D(leftToRight ? s.x2 : s.x1, s.y);
+                        Point2D a = rp(aW, rot, rad), b = rp(bW, rot, rad);
                         if (cursor != null && cursor.dist(a) > 0.05) {
-                            colTp.addCutSegment(cursor, a);
+                            List<Point2D> arc = connectorHitsHole(work, cursorW, aW)
+                                    ? holeArc(work, cursorW, aW) : null;
+                            if (arc == null) {
+                                colTp.addCutSegment(cursor, a);
+                            } else {
+                                // Follow the hole boundary so the step stays in material
+                                Point2D prev = cursor;
+                                for (Point2D q : arc) {
+                                    Point2D qr = rp(q, rot, rad);
+                                    if (prev.dist(qr) > 0.05) { colTp.addCutSegment(prev, qr); prev = qr; }
+                                }
+                                if (prev.dist(a) > 0.05) colTp.addCutSegment(prev, a);
+                            }
                         }
                         colTp.addCutSegment(a, b);
                         cursor = b;
+                        cursorW = bW;
                         leftToRight = !leftToRight;
                     }
                     if (!colTp.getSegments().isEmpty()) columnPaths.add(colTp);
