@@ -10,6 +10,11 @@ public class Toolpath {
         segments.add(new ToolpathSegment(start, end, true));
     }
 
+    /** Cut segment with its own laser power (raster engraving). */
+    public void addCutSegment(Point2D start, Point2D end, double power) {
+        segments.add(new ToolpathSegment(start, end, true, power));
+    }
+
     public void addTravelSegment(Point2D start, Point2D end) {
         segments.add(new ToolpathSegment(start, end, false));
     }
@@ -19,11 +24,13 @@ public class Toolpath {
     }
 
     public void addSegment(ToolpathSegment segment) {
-        if (segment.isCut()) {
-            addCutSegment(segment.start(), segment.end());
-        } else {
-            addTravelSegment(segment.start(), segment.end());
-        }
+        segments.add(segment); // keeps per-segment power
+    }
+
+    /** True if any segment carries its own power (raster job). */
+    public boolean hasVariablePower() {
+        for (ToolpathSegment s : segments) if (s.hasPower()) return true;
+        return false;
     }
 
     /**

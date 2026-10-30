@@ -24,7 +24,7 @@ public class ToolpathSvgPreview {
                 String strokeWidth = seg.isCut() ? "0.5" : "0.3";
                 String dash = seg.isCut() ? "" : " stroke-dasharray=\"1,1\"";
                 
-                writer.printf("  <line x1=\"%.4f\" y1=\"%.4f\" x2=\"%.4f\" y2=\"%.4f\" stroke=\"%s\" stroke-width=\"%s\"%s />\n",
+                writer.printf(java.util.Locale.ROOT, "  <line x1=\"%.4f\" y1=\"%.4f\" x2=\"%.4f\" y2=\"%.4f\" stroke=\"%s\" stroke-width=\"%s\"%s />\n",
                         seg.start().x(), seg.start().y(),
                         seg.end().x(), seg.end().y(),
                         color, strokeWidth, dash);

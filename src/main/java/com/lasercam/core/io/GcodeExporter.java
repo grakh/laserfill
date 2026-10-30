@@ -35,16 +35,51 @@ public class GcodeExporter {
     }
 
     public void export(Toolpath toolpath, String filePath, double feedRateCut, double feedRateTravel, double power) throws IOException {
-        try (PrintWriter writer = new PrintWriter(new FileWriter(filePath))) {
+        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(filePath), 1 << 16))) {
             writeHeader(writer, feedRateCut, power);
 
             if (zDepth > 0 && zStep > 0) {
                 exportMillMode(writer, toolpath, feedRateCut, power);
+            } else if (toolpath.hasVariablePower()) {
+                exportRaster(writer, toolpath, feedRateCut);
             } else {
                 exportLaserMode(writer, toolpath, feedRateCut, power);
             }
             writeFooter(writer);
         }
+    }
+
+    /**
+     * Raster engraving with per-segment power. Uses M4 (dynamic laser power, GRBL
+     * laser mode $32=1): power follows the actual speed, so acceleration does not
+     * leave dark marks, and G0 turns the beam off. S and F are written only when
+     * they change, and coordinates use 3 decimals to keep the file small.
+     */
+    private void exportRaster(PrintWriter w, Toolpath toolpath, double feedRateCut) {
+        w.println("; Raster engraving — requires GRBL laser mode ($32=1)");
+        w.println("M4 S0 ; dynamic laser power");
+        Point2D lastPos = null;
+        int lastS = -1;
+        int lastF = -1;
+        for (ToolpathSegment seg : toolpath.getSegments()) {
+            Point2D start = seg.start(), end = seg.end();
+            if (lastPos == null || lastPos.dist(start) > 0.0005) {
+                w.printf(java.util.Locale.ROOT, "G0 X%.3f Y%.3f%n", start.x(), start.y());
+            }
+            if (seg.isCut()) {
+                int s = (int) Math.round(Math.max(0, seg.power()));
+                int f = (int) feedRateCut;
+                StringBuilder sb = new StringBuilder("G1");
+                sb.append(String.format(java.util.Locale.ROOT, " X%.3f Y%.3f", end.x(), end.y()));
+                if (s != lastS) { sb.append(" S").append(s); lastS = s; }
+                if (f != lastF) { sb.append(" F").append(f); lastF = f; }
+                w.println(sb);
+            } else {
+                w.printf(java.util.Locale.ROOT, "G0 X%.3f Y%.3f%n", end.x(), end.y());
+            }
+            lastPos = end;
+        }
+        w.println("S0");
     }
 
     /** Laser mode — original behavior (M3/M5, no Z axis). */
@@ -57,17 +92,17 @@ public class GcodeExporter {
 
             if (lastPos == null || lastPos.dist(start) > 0.005) {
                 if (laserOn) { writer.println("M5 ; laser off"); laserOn = false; }
-                writer.printf("G0 X%.4f Y%.4f%n", start.x(), start.y());
+                writer.printf(java.util.Locale.ROOT, "G0 X%.4f Y%.4f%n", start.x(), start.y());
             }
             if (seg.isCut()) {
                 if (!laserOn) {
-                    writer.printf("M3 S%d%n", (int) power);
+                    writer.printf(java.util.Locale.ROOT, "M3 S%d%n", (int) power);
                     laserOn = true;
                 }
-                writer.printf("G1 X%.4f Y%.4f F%d%n", end.x(), end.y(), (int) feedRateCut);
+                writer.printf(java.util.Locale.ROOT, "G1 X%.4f Y%.4f F%d%n", end.x(), end.y(), (int) feedRateCut);
             } else {
                 if (laserOn) { writer.println("M5 ; laser off"); laserOn = false; }
-                writer.printf("G0 X%.4f Y%.4f%n", end.x(), end.y());
+                writer.printf(java.util.Locale.ROOT, "G0 X%.4f Y%.4f%n", end.x(), end.y());
             }
             lastPos = end;
         }
@@ -76,13 +111,13 @@ public class GcodeExporter {
     /** Mill mode — repeats toolpath at descending Z levels. */
     private void exportMillMode(PrintWriter writer, Toolpath toolpath, double feedRateCut, double spindleSpeed) {
         int passes = (int) Math.ceil(zDepth / zStep);
-        writer.printf("; Mill mode: %d passes, total depth=%.2fmm, step=%.2fmm%n", passes, zDepth, zStep);
-        writer.printf("M3 S%d ; spindle on%n", (int) spindleSpeed);
-        writer.printf("G0 Z%.3f ; safe height%n", zSafe);
+        writer.printf(java.util.Locale.ROOT, "; Mill mode: %d passes, total depth=%.2fmm, step=%.2fmm%n", passes, zDepth, zStep);
+        writer.printf(java.util.Locale.ROOT, "M3 S%d ; spindle on%n", (int) spindleSpeed);
+        writer.printf(java.util.Locale.ROOT, "G0 Z%.3f ; safe height%n", zSafe);
 
         for (int p = 1; p <= passes; p++) {
             double curZ = -Math.min(p * zStep, zDepth);
-            writer.printf("; ─── Pass %d/%d, Z=%.3f ───%n", p, passes, curZ);
+            writer.printf(java.util.Locale.ROOT, "; ─── Pass %d/%d, Z=%.3f ───%n", p, passes, curZ);
 
             Point2D lastPos = null;
             boolean plunged = false;
@@ -93,37 +128,37 @@ public class GcodeExporter {
                 if (lastPos == null || lastPos.dist(start) > 0.005) {
                     // Retract before travel
                     if (plunged) {
-                        writer.printf("G0 Z%.3f ; retract%n", zSafe);
+                        writer.printf(java.util.Locale.ROOT, "G0 Z%.3f ; retract%n", zSafe);
                         plunged = false;
                     }
-                    writer.printf("G0 X%.4f Y%.4f%n", start.x(), start.y());
+                    writer.printf(java.util.Locale.ROOT, "G0 X%.4f Y%.4f%n", start.x(), start.y());
                 }
 
                 if (seg.isCut()) {
                     if (!plunged) {
-                        writer.printf("G1 Z%.3f F%d ; plunge%n", curZ, (int) feedRateZ);
+                        writer.printf(java.util.Locale.ROOT, "G1 Z%.3f F%d ; plunge%n", curZ, (int) feedRateZ);
                         plunged = true;
                     }
-                    writer.printf("G1 X%.4f Y%.4f F%d%n", end.x(), end.y(), (int) feedRateCut);
+                    writer.printf(java.util.Locale.ROOT, "G1 X%.4f Y%.4f F%d%n", end.x(), end.y(), (int) feedRateCut);
                 } else {
                     if (plunged) {
-                        writer.printf("G0 Z%.3f ; retract%n", zSafe);
+                        writer.printf(java.util.Locale.ROOT, "G0 Z%.3f ; retract%n", zSafe);
                         plunged = false;
                     }
-                    writer.printf("G0 X%.4f Y%.4f%n", end.x(), end.y());
+                    writer.printf(java.util.Locale.ROOT, "G0 X%.4f Y%.4f%n", end.x(), end.y());
                 }
                 lastPos = end;
             }
             // End of pass — retract
-            writer.printf("G0 Z%.3f%n", zSafe);
+            writer.printf(java.util.Locale.ROOT, "G0 Z%.3f%n", zSafe);
         }
         writer.println("M5 ; spindle off");
     }
 
     private void writeHeader(PrintWriter w, double feedRate, double power) {
         w.println("; LaserCam G-code generated");
-        w.printf("; Firmware: %s%n", firmware);
-        if (zDepth > 0) w.printf("; Mode: MILL (depth=%.2fmm, step=%.2fmm)%n", zDepth, zStep);
+        w.printf(java.util.Locale.ROOT, "; Firmware: %s%n", firmware);
+        if (zDepth > 0) w.printf(java.util.Locale.ROOT, "; Mode: MILL (depth=%.2fmm, step=%.2fmm)%n", zDepth, zStep);
         else w.println("; Mode: LASER");
         w.println("G21 ; mm mode");
         w.println("G90 ; absolute");
@@ -132,7 +167,7 @@ public class GcodeExporter {
 
     private void writeFooter(PrintWriter w) {
         if (zDepth > 0) {
-            w.printf("G0 Z%.3f ; retract to safe%n", zSafe);
+            w.printf(java.util.Locale.ROOT, "G0 Z%.3f ; retract to safe%n", zSafe);
             w.println("M5 ; spindle off");
         } else {
             w.println("M5 ; laser off");

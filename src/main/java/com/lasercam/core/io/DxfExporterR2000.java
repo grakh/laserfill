@@ -69,7 +69,7 @@ public class DxfExporterR2000 {
         w.println("0");
         w.println("LWPOLYLINE");
         w.println("5");
-        w.println(String.format("%X", 100 + handle));
+        w.println(String.format(java.util.Locale.ROOT, "%X", 100 + handle));
         w.println("8");
         w.println(layer);
         w.println("90");
@@ -79,9 +79,9 @@ public class DxfExporterR2000 {
 
         for (Point2D p : points) {
             w.println("10");
-            w.println(String.format("%.4f", p.x()));
+            w.println(String.format(java.util.Locale.ROOT, "%.4f", p.x()));
             w.println("20");
-            w.println(String.format("%.4f", p.y()));
+            w.println(String.format(java.util.Locale.ROOT, "%.4f", p.y()));
         }
     }
 

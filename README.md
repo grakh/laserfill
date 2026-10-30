@@ -48,6 +48,20 @@ engine.exportToDxf(tp, "out.dxf", true);
 - **Coordinate readout** under cursor
 - Zero dependencies — works on any JDK 17+, no JavaFX needed
 
+## Image engraving (Fill → Image)
+
+Open a PNG/JPG/BMP/GIF; the fill switches to **Image** automatically.
+
+- Darkness maps to power: `power = Min power + darkness × (Power − Min power)` —
+  the darkest point gets **Power** from the EXPORT section, white is not burned.
+- **Width mm** sets the size (height keeps the aspect ratio), **Line step mm** is
+  both line spacing and pixel size along a line.
+- **Gamma** < 1 brings out light tones, > 1 deepens dark ones; **Invert** swaps them;
+  **Dither** (Floyd–Steinberg) burns on/off dots at full power for lasers without
+  good grayscale.
+- **Overscan mm** — run-in/run-out with the laser off so line ends are not over-burned.
+- G-code uses `M4` (dynamic power) with `S` per segment; GRBL needs laser mode `$32=1`.
+
 ## Modules
 
 | Package | Classes | Role |
